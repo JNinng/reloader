@@ -9,7 +9,7 @@ import (
 	"github.com/jninng/reloader"
 )
 
-// demoClient 模拟被热更新管理的目标资源（真实场景如 *redis.Client，
+// demoClient 模拟被重载器管理的目标资源（真实场景如 *redis.Client，
 // 可直接使用其原生 API）。
 type demoClient struct {
 	addr string
@@ -51,7 +51,7 @@ func Example() {
 	res, gen := r.Snapshot()
 	fmt.Println(gen, res.addr, r.Generation() == gen)
 
-	// 进程优雅退出时收尾：关闭当前资源并提前触发未到期的排空。
+	// 进程退出前收尾：关停重载器——关闭当前资源并提前触发未到期排空。
 	_ = r.Shutdown(context.Background())
 	// Output: 2 10.0.0.2:6379 true
 }

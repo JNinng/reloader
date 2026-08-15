@@ -85,6 +85,24 @@ func (o *obsLog) String() string {
 	return b.String()
 }
 
+// closedWhere 报告是否已观察到匹配的关闭事件：reason 为空匹配任意
+// 原因；errOK 为 nil 跳过错误断言。
+func (o *obsLog) closedWhere(gen uint64, reason CloseReason, errOK func(error) bool) bool {
+	for _, e := range o.snapshot() {
+		if e.kind != "closed" || e.gen != gen {
+			continue
+		}
+		if reason != "" && e.reason != reason {
+			continue
+		}
+		if errOK != nil && !errOK(e.err) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (o *obsLog) OnReloadStart(e ReloadStartEvent) {
 	o.add(obsRec{kind: "start", gen: e.Generation})
 }
@@ -197,6 +215,14 @@ func (m *tMeter) gauge(name string) float64 {
 	}
 	return 0
 }
+
+// badMeter 动态类型不可比较（含切片字段）的 Meter：验证共享缓存的
+// 退化路径（ADR-0003：不可比较键退化为每实例直建而非 panic）。
+type badMeter struct{ _ []int }
+
+func (badMeter) NewCounter(name, _ string) observ.Counter                  { return &tCounter{} }
+func (badMeter) NewGauge(name, _ string) observ.Gauge                      { return &tGauge{} }
+func (badMeter) NewHistogram(name, _ string, _ []float64) observ.Histogram { return &tHist{} }
 
 // waitFor 在期限内轮询条件。
 func waitFor(t *testing.T, d time.Duration, cond func() bool) {
@@ -373,14 +399,7 @@ func TestDrainClosesOld(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 等事件本身（资源关闭先于事件分发，等 closed 标志会有窗口）。
-	waitFor(t, 2*time.Second, func() bool {
-		for _, e := range obs.snapshot() {
-			if e.kind == "closed" && e.gen == 1 && e.reason == CloseDrain {
-				return true
-			}
-		}
-		return false
-	})
+	waitFor(t, 2*time.Second, func() bool { return obs.closedWhere(1, CloseDrain, nil) })
 	if !old.closed.Load() {
 		t.Fatal("事件已观察到但资源未关闭")
 	}
@@ -431,12 +450,9 @@ func TestCloserPanicRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, 2*time.Second, func() bool {
-		for _, e := range obs.snapshot() {
-			if e.kind == "closed" && e.gen == 1 && e.err != nil && strings.Contains(e.err.Error(), "panic") {
-				return true
-			}
-		}
-		return false
+		return obs.closedWhere(1, CloseDrain, func(err error) bool {
+			return err != nil && strings.Contains(err.Error(), "panic")
+		})
 	})
 	_ = old
 	_ = r.Shutdown(context.Background())
@@ -608,14 +624,7 @@ func TestObserverEventSequence(t *testing.T) {
 	if err := r.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 2*time.Second, func() bool {
-		for _, e := range obs.snapshot() {
-			if e.kind == "closed" && e.gen == 1 {
-				return true
-			}
-		}
-		return false
-	})
+	waitFor(t, 2*time.Second, func() bool { return obs.closedWhere(1, "", nil) })
 	if err := r.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -667,6 +676,27 @@ func TestMetricsSharedPerMeter(t *testing.T) {
 	}
 	if got := m1.gauge("reloader_generation"); got != 2 {
 		t.Fatalf("m1 generation = %v, want 2", got)
+	}
+}
+
+func TestMetricsNonComparableMeterDegrades(t *testing.T) {
+	m := badMeter{}
+	mk := func() *Reloader[*fakeRes] {
+		t.Helper()
+		r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m))
+		if err != nil {
+			t.Fatalf("不可比较 Meter 不应使 New 报错: %v", err)
+		}
+		return r
+	}
+	r1, r2 := mk(), mk() // 各自独立直建：不共享、不 panic
+	for _, r := range []*Reloader[*fakeRes]{r1, r2} {
+		if err := r.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if g := r.Generation(); g != 2 {
+			t.Fatalf("generation = %d, want 2", g)
+		}
 	}
 }
 

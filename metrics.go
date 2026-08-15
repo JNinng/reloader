@@ -39,23 +39,34 @@ func newMetricSet(m observ.Meter) *metricSet {
 
 // metricsFor 返回该 Meter 的共享指标集；nil 与 NoopMeter 返回 nil
 // （整体跳过埋点）。Meter 动态类型不可比较时退化为每实例独立创建
-// （ADR-0003 防御；仅 recover 映射键 panic，New* 的 panic 按契约
-// 原样上抛）。
-func metricsFor(m observ.Meter) (ms *metricSet) {
+// （ADR-0003 防御；仅 recover 映射键 panic——读写均会触发，New* 的
+// panic 按契约原样上抛）。
+func metricsFor(m observ.Meter) *metricSet {
 	if m == nil || m == observ.NoopMeter {
 		return nil
 	}
-	metricMu.Lock()
-	defer metricMu.Unlock()
-	if set, ok := metricSets[m]; ok {
+	if set, ok := sharedSet(m); ok {
 		return set
 	}
-	ms = newMetricSet(m)
-	func() {
-		defer func() { _ = recover() }() // 键不可比较：放弃共享，本实例独立持有
-		metricSets[m] = ms
+	return newMetricSet(m) // 键不可比较：退化，本实例独立持有
+}
+
+// sharedSet 查共享缓存并写入；键不可比较（map 读写即 panic）时返回
+// ok=false，由调用方退化为每实例直建。
+func sharedSet(m observ.Meter) (set *metricSet, ok bool) {
+	defer func() {
+		if recover() != nil {
+			set, ok = nil, false
+		}
 	}()
-	return ms
+	metricMu.Lock()
+	defer metricMu.Unlock()
+	if s, found := metricSets[m]; found {
+		return s, true
+	}
+	s := newMetricSet(m)
+	metricSets[m] = s
+	return s, true
 }
 
 // observeBuild 记录一轮构建结果与耗时。

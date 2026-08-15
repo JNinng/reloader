@@ -23,6 +23,10 @@ func (closerOption[T]) option() {}
 // WithCloser 注入资源关闭函数，启用排空（Drain）：换下的旧资源经
 // WithCloseDelay 宽限期后关闭。缺省 nil 为纯换新——不关闭、无排空，
 // 适用于无泄漏风险的值类型资源（如配置快照）。T 由参数推断。
+//
+// 关闭函数一律以 context.Background() 执行——排空由独立 timer
+// goroutine 触发、关停时无调用方 ctx 可透传，需要超时由关闭函数自行
+// 包装；排空关闭的结果仅经 OnResourceClosed 事件与 warn 日志上报。
 func WithCloser[T any](close func(ctx context.Context, res T) error) Option {
 	return closerOption[T]{fn: close}
 }

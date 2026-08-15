@@ -94,8 +94,9 @@ func New[T any](ctx context.Context, build func(ctx context.Context, gen uint64)
 //
 // 并发语义：重载轮串行执行；执行期间到达的调用合并为至多一轮补跑
 // （pull 语义下无损），合并的调用返回补跑轮结果、计入
-// reloader_reload_coalesced_total。ctx 仅透传给工厂与关闭函数——换新
-// 判定只看工厂返回值；等待补跑期间 ctx 取消立即返回 ctx.Err()，
+// reloader_reload_coalesced_total。ctx 仅透传给工厂——换新判定只看
+// 工厂返回值（关闭函数一律收 context.Background()，见 WithCloser）；
+// 等待补跑期间 ctx 取消立即返回 ctx.Err()，
 // 补跑可能因此多执行一轮（无害）。Shutdown 之后返回 ErrShutdown。
 func (r *Reloader[T]) Reload(ctx context.Context) error {
 	r.mu.Lock()
@@ -131,7 +132,8 @@ func (r *Reloader[T]) Reload(ctx context.Context) error {
 			r.mu.Unlock()
 			return ErrShutdown
 		case !r.running:
-			// 防御：执行权已交还（正常流程不可达），接管补跑。
+			// 执行者已交还执行权（如执行者 ctx 取消中断补跑链）而目标
+			// 轮尚未完成：由本调用方接管补跑。
 			r.running = true
 			r.mu.Unlock()
 			return r.runRounds(ctx)
