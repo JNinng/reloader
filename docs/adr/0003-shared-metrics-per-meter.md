@@ -4,4 +4,4 @@
 
 ## Considered Options
 
-- 每实例独立注册，文档要求多实例传独立 registry — 否决：构造期 panic 是显著 footgun。
+- 每实例独立注册，文档要求多实例传独立 registry — 否决：构造期 panic 是显著陷阱。

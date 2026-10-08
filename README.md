@@ -72,7 +72,7 @@ res, gen := r.Snapshot() // 单次原子载入，配对不会跨过重载
 logger.Info("handle", slog.Uint64(reloader.AttrGeneration, gen))
 ```
 
-### 进程优雅退出
+### 优雅关停
 
 ```go
 // 在 HTTP 服务排空在途请求之后调用：
