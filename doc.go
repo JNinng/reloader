@@ -24,9 +24,10 @@
 //  7. 错误透传：业务错误（工厂、关闭）原样返回；工厂/关闭/观察者的
 //     panic 被 recover 转为错误或日志，不逃逸到其他调用方 goroutine。
 //
-// 可观测接入对齐 github.com/jninng/observ 手册：类型化非泛型 Observer
-// （事件按值、不含资源句柄）、option 注入（WithMeter 默认 Noop、
-// WithLogger 构造期快照）、回调同步快速执行且被 recover、指标仅
-// 无 label 与枚举拆名两种形态（多实例按 Meter 去重共享，ADR-0003）。
-// 日志仅记录低频生命周期事件，热路径（Current/Snapshot）零埋点。
+// 可观测：日志走 stdlib slog（WithLogger 注入 *slog.Logger，缺省静默、
+// 构造期快照），指标走 OpenTelemetry（WithMeter 注入 metric.Meter，
+// 缺省 nil 不埋点）；类型化非泛型 Observer（事件按值、不含资源句柄），
+// 回调同步快速执行且被 recover；指标仅无 label 与枚举拆名两种形态
+// （多实例按 Meter 去重共享，ADR-0003）。日志仅记录低频生命周期事件，
+// 热路径（Current/Snapshot）零埋点。
 package reloader

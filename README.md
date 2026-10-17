@@ -10,7 +10,7 @@
 - **排空（Drain）**：换下的旧资源经宽限期（缺省 30s，可配）后关闭，在途持有者宽限期内仍可用；无 closer 时为纯换新，适配值类型配置快照。
 - **串行 + 合并**：重载轮串行执行，执行期间到达的调用合并为至多一轮补跑（pull 语义下无损）。
 - **优雅关停**：`Shutdown` 等待在途重载（受 ctx 约束）后立即关闭当前资源、提前触发未到期排空。
-- **零依赖可观测**：对齐 [observ](https://github.com/jninng/observ) 手册——类型化非泛型 Observer、option 注入、回调同步执行且被 recover、指标无 label/枚举拆名。
+- **可观测**：日志走 stdlib `log/slog`、指标走 OpenTelemetry——类型化非泛型 Observer、option 注入、回调同步执行且被 recover、指标无 label/枚举拆名。
 
 ## 安装
 
@@ -18,7 +18,7 @@
 go get github.com/jninng/reloader
 ```
 
-唯一第三方依赖为 `github.com/jninng/observ`（自身零依赖）。要求 Go 1.21+。
+运行时唯一第三方依赖为 `go.opentelemetry.io/otel/metric`；测试为仪表断言另用 `go.opentelemetry.io/otel/sdk/metric`（不出现在库代码 import 中）。要求 Go 1.26+。
 
 ## 快速上手
 
@@ -94,8 +94,8 @@ _ = r.Shutdown(ctx)
 ## 可观测
 
 - **Observer**（`WithObserver`，可多次注入）：`OnReloadStart` / `OnReloadEnd` / `OnResourceClosed`，事件按值、不含资源句柄，回调同步快速执行、panic 被 recover。
-- **指标**（`WithMeter`，缺省 Noop）：`reloader_reload_success_total` / `reloader_reload_fail_total` / `reloader_reload_seconds` / `reloader_generation` / `reloader_reload_coalesced_total`。多实例共用同一 Meter 时按 Meter 去重共享、聚合为进程口径（[ADR-0003](docs/adr/0003-shared-metrics-per-meter.md)）。
-- **日志**（`WithLogger`，缺省构造期快照 `observ.DefaultLogger()`）：仅低频生命周期事件；热路径（`Current`/`Snapshot`）零埋点。
+- **指标**（`WithMeter`，缺省 nil 不埋点）：`reloader_reload_success_total` / `reloader_reload_fail_total` / `reloader_reload_seconds` / `reloader_generation` / `reloader_reload_coalesced_total`。多实例共用同一 Meter 时按 Meter 去重共享、聚合为进程口径（[ADR-0003](docs/adr/0003-shared-metrics-per-meter.md)）。
+- **日志**（`WithLogger`，缺省静默——构造期快照 discard logger，需输出时显式传入如 `slog.Default()`）：仅低频生命周期事件；热路径（`Current`/`Snapshot`）零埋点。
 
 ## 仓库结构
 

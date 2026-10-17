@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jninng/observ"
 	"github.com/jninng/reloader"
 )
 
@@ -110,7 +109,7 @@ func main() {
 		reloader.WithCloser(closer),
 		reloader.WithCloseDelay(300*time.Millisecond), // 演示排空窗口
 		reloader.WithObserver(printObserver{}),
-		reloader.WithLogger(observ.NewSlogLogger(slog.Default())),
+		reloader.WithLogger(slog.Default()),
 	)
 	if err != nil {
 		panic(err) // 首建失败 fail-fast

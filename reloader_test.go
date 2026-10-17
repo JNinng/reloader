@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/jninng/observ"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // ---- 测试桩 ----
@@ -122,107 +126,81 @@ func (panicObserver) OnResourceClosed(ResourceClosedEvent) {
 	panic("boom-closed")
 }
 
-// tMeter 实现 observ.Meter，带读回。
-type tCounter struct {
-	mu sync.Mutex
-	v  float64
+// testMeter 带读回的指标落点：otel 同步仪表接口密封（内嵌未导出标记
+// 方法）无法外部 fake，仪表值断言经 sdk ManualReader 收集 metricdata
+// 完成（Sum 取累计和、Gauge 取最新值）。
+type testMeter struct {
+	meter  metric.Meter
+	reader *sdkmetric.ManualReader
 }
 
-func (c *tCounter) Inc() { c.Add(1) }
-func (c *tCounter) Add(v float64) {
-	c.mu.Lock()
-	c.v += v
-	c.mu.Unlock()
+func newTestMeter(t *testing.T) *testMeter {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	return &testMeter{meter: provider.Meter("reloader.test"), reader: reader}
 }
 
-type tGauge struct {
-	mu sync.Mutex
-	v  float64
-}
-
-func (g *tGauge) Set(v float64) { g.mu.Lock(); g.v = v; g.mu.Unlock() }
-func (g *tGauge) Add(v float64) { g.mu.Lock(); g.v += v; g.mu.Unlock() }
-
-type tHist struct {
-	mu    sync.Mutex
-	count int
-}
-
-func (h *tHist) Observe(float64) {
-	h.mu.Lock()
-	h.count++
-	h.mu.Unlock()
-}
-
-type tMeter struct {
-	mu       sync.Mutex
-	counters map[string]*tCounter
-	gauges   map[string]*tGauge
-	hists    map[string]*tHist
-}
-
-func (m *tMeter) NewCounter(name, _ string) observ.Counter {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	c := &tCounter{}
-	if m.counters == nil {
-		m.counters = map[string]*tCounter{}
+func (tm *testMeter) collect() metricdata.ResourceMetrics {
+	var rm metricdata.ResourceMetrics
+	if err := tm.reader.Collect(context.Background(), &rm); err != nil {
+		panic(err) // 测试桩：收集失败即失败
 	}
-	m.counters[name] = c
-	return c
+	return rm
 }
 
-func (m *tMeter) NewGauge(name, _ string) observ.Gauge {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	g := &tGauge{}
-	if m.gauges == nil {
-		m.gauges = map[string]*tGauge{}
-	}
-	m.gauges[name] = g
-	return g
-}
-
-func (m *tMeter) NewHistogram(name, _ string, _ []float64) observ.Histogram {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	h := &tHist{}
-	if m.hists == nil {
-		m.hists = map[string]*tHist{}
-	}
-	m.hists[name] = h
-	return h
-}
-
-func (m *tMeter) counter(name string) float64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if c, ok := m.counters[name]; ok {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.v
+// counter 返回计数器指标（Sum）的累计和；指标不存在返回 0。
+func (tm *testMeter) counter(name string) float64 {
+	for _, sm := range tm.collect().ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			var total int64
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+			return float64(total)
+		}
 	}
 	return 0
 }
 
-func (m *tMeter) gauge(name string) float64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if g, ok := m.gauges[name]; ok {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return g.v
+// gauge 返回仪表指标（Gauge）的最新值；指标不存在返回 0。
+func (tm *testMeter) gauge(name string) float64 {
+	for _, sm := range tm.collect().ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			g, ok := m.Data.(metricdata.Gauge[int64])
+			if !ok {
+				continue
+			}
+			if len(g.DataPoints) > 0 {
+				return float64(g.DataPoints[len(g.DataPoints)-1].Value)
+			}
+		}
 	}
 	return 0
 }
 
-// badMeter 动态类型不可比较（含切片字段）的 Meter：验证共享缓存的
-// 退化路径（ADR-0003：不可比较键退化为每实例直建而非 panic）。
-type badMeter struct{ _ []int }
+// newBadMeter 返回动态类型不可比较（含切片字段）的 Meter：验证共享
+// 缓存的退化路径（ADR-0003：不可比较键退化为每实例直建而非 panic）。
+// 同步仪表接口密封，工厂方法嵌入 noop Meter 返回真实仪表。
+type badMeter struct {
+	metric.Meter
+	_ []int
+}
 
-func (badMeter) NewCounter(name, _ string) observ.Counter                  { return &tCounter{} }
-func (badMeter) NewGauge(name, _ string) observ.Gauge                      { return &tGauge{} }
-func (badMeter) NewHistogram(name, _ string, _ []float64) observ.Histogram { return &tHist{} }
+func newBadMeter() badMeter {
+	return badMeter{Meter: noop.NewMeterProvider().Meter("reloader.bad")}
+}
 
 // waitFor 在期限内轮询条件。
 func waitFor(t *testing.T, d time.Duration, cond func() bool) {
@@ -280,10 +258,10 @@ func TestNewInitialState(t *testing.T) {
 
 func TestNewBuildFail(t *testing.T) {
 	boom := errors.New("cfg down")
-	m := &tMeter{}
+	m := newTestMeter(t)
 	_, err := New(context.Background(),
 		func(ctx context.Context, gen uint64) (*fakeRes, error) { return nil, boom },
-		WithMeter(m))
+		WithMeter(m.meter))
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want 原样透传 boom", err)
 	}
@@ -301,6 +279,20 @@ func TestNewNilBuild(t *testing.T) {
 	}
 }
 
+func TestDefaultsSilent(t *testing.T) {
+	// 未配置时默认静默：不埋点（nil Meter）且日志走 discard。
+	cfg, err := newConfig[*fakeRes]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.meter != nil {
+		t.Fatal("缺省 Meter 应为 nil（不埋点）")
+	}
+	if cfg.logger == nil || cfg.logger.Handler() != slog.DiscardHandler {
+		t.Fatal("缺省 Logger 应为 discard（默认静默）")
+	}
+}
+
 func TestNewTypeMismatchedCloser(t *testing.T) {
 	// closer 绑定了别的资源类型：应报错而非静默忽略。
 	_, err := New(context.Background(), recordingBuild(&buildLog{}),
@@ -313,8 +305,8 @@ func TestNewTypeMismatchedCloser(t *testing.T) {
 // ---- 重载语义 ----
 
 func TestReloadPureSwap(t *testing.T) {
-	m := &tMeter{}
-	r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m))
+	m := newTestMeter(t)
+	r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m.meter))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +334,7 @@ func TestReloadPureSwap(t *testing.T) {
 
 func TestReloadFailKeepsOldAndGenNotConsumed(t *testing.T) {
 	boom := errors.New("build boom")
-	m := &tMeter{}
+	m := newTestMeter(t)
 	bl := &buildLog{}
 	var fails atomic.Int32
 	build := func(ctx context.Context, gen uint64) (*fakeRes, error) {
@@ -351,7 +343,7 @@ func TestReloadFailKeepsOldAndGenNotConsumed(t *testing.T) {
 		}
 		return recordingBuild(bl)(ctx, gen)
 	}
-	r, err := New(context.Background(), build, WithMeter(m), WithCloser(fakeCloser()))
+	r, err := New(context.Background(), build, WithMeter(m.meter), WithCloser(fakeCloser()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,8 +453,8 @@ func TestCloserPanicRecovered(t *testing.T) {
 // ---- 合并（coalesce） ----
 
 func TestReloadCoalesce(t *testing.T) {
-	m := &tMeter{}
-	r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m), WithCloser(fakeCloser()))
+	m := newTestMeter(t)
+	r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m.meter), WithCloser(fakeCloser()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,10 +645,10 @@ func TestObserverPanicRecovered(t *testing.T) {
 // ---- 指标共享（ADR-0003） ----
 
 func TestMetricsSharedPerMeter(t *testing.T) {
-	m1, m2 := &tMeter{}, &tMeter{}
-	mk := func(m *tMeter) *Reloader[*fakeRes] {
+	m1, m2 := newTestMeter(t), newTestMeter(t)
+	mk := func(m *testMeter) *Reloader[*fakeRes] {
 		t.Helper()
-		r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m))
+		r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m.meter))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -680,7 +672,7 @@ func TestMetricsSharedPerMeter(t *testing.T) {
 }
 
 func TestMetricsNonComparableMeterDegrades(t *testing.T) {
-	m := badMeter{}
+	m := newBadMeter()
 	mk := func() *Reloader[*fakeRes] {
 		t.Helper()
 		r, err := New(context.Background(), recordingBuild(&buildLog{}), WithMeter(m))
@@ -703,7 +695,7 @@ func TestMetricsNonComparableMeterDegrades(t *testing.T) {
 // ---- 并发风暴 ----
 
 func TestConcurrentReloadStorm(t *testing.T) {
-	m := &tMeter{}
+	m := newTestMeter(t)
 	obs := &obsLog{}
 	bl := &buildLog{}
 	r, err := New(context.Background(),
@@ -716,7 +708,7 @@ func TestConcurrentReloadStorm(t *testing.T) {
 		WithCloser(fakeCloser()),
 		WithCloseDelay(time.Millisecond),
 		WithObserver(obs),
-		WithMeter(m))
+		WithMeter(m.meter))
 	if err != nil {
 		t.Fatal(err)
 	}

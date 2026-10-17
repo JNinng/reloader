@@ -8,8 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/jninng/observ"
 )
 
 // ErrShutdown 在 Shutdown 之后调用 Reload 返回。
@@ -35,7 +33,7 @@ type Reloader[T any] struct {
 	closer func(ctx context.Context, res T) error
 	delay  time.Duration
 
-	logger    observ.Logger
+	logger    *slog.Logger
 	observers []Observer // 构造后只读
 	ms        *metricSet // 构造后只读；nil 表示不埋点
 
@@ -94,10 +92,11 @@ func New[T any](ctx context.Context, build func(ctx context.Context, gen uint64)
 //
 // 并发语义：重载轮串行执行；执行期间到达的调用合并为至多一轮补跑
 // （pull 语义下无损），合并的调用返回补跑轮结果、计入
-// reloader_reload_coalesced_total。ctx 仅透传给工厂——换新判定只看
-// 工厂返回值（关闭函数一律收 context.Background()，见 WithCloser）；
-// 等待补跑期间 ctx 取消立即返回 ctx.Err()，
-// 补跑可能因此多执行一轮（无害）。Shutdown 之后返回 ErrShutdown。
+// reloader_reload_coalesced_total。换新判定只看工厂返回值；ctx 透传
+// 给工厂与打点/日志（信息载体，取消不构成丢点理由），关闭函数一律
+// 收 context.Background()（见 WithCloser）。等待补跑期间 ctx 取消
+// 立即返回 ctx.Err()，补跑可能因此多执行一轮（无害）。
+// Shutdown 之后返回 ErrShutdown。
 func (r *Reloader[T]) Reload(ctx context.Context) error {
 	r.mu.Lock()
 	if r.shutdown {
@@ -111,7 +110,7 @@ func (r *Reloader[T]) Reload(ctx context.Context) error {
 	}
 	// 有轮在执行：登记合并，等待补跑轮结果。
 	r.pending = true
-	r.ms.observeCoalesced()
+	r.ms.observeCoalesced(ctx)
 	target := r.seq + 2
 	ch := r.done
 	r.mu.Unlock()
@@ -183,26 +182,26 @@ func (r *Reloader[T]) doReload(ctx context.Context) error {
 		nextGen = old.gen + 1
 	}
 	start := time.Now()
-	r.dispatch(func(o Observer) { o.OnReloadStart(ReloadStartEvent{Generation: nextGen}) })
+	r.dispatch(ctx, func(o Observer) { o.OnReloadStart(ReloadStartEvent{Generation: nextGen}) })
 
 	res, err := r.buildSafe(ctx, nextGen)
 	dur := time.Since(start)
 
-	r.ms.observeBuild(err, dur, nextGen)
-	r.dispatch(func(o Observer) {
+	r.ms.observeBuild(ctx, err, dur, nextGen)
+	r.dispatch(ctx, func(o Observer) {
 		o.OnReloadEnd(ReloadEndEvent{Generation: nextGen, Duration: dur, Err: err})
 	})
 
 	if err != nil {
-		r.log(slog.LevelWarn, "reloader: build failed, keep current",
+		r.log(ctx, slog.LevelWarn, "reloader: build failed, keep current",
 			slog.Uint64(AttrGeneration, nextGen),
-			slog.String(observ.AttrErrorType, fmt.Sprintf("%T", err)),
-			slog.Float64(observ.AttrDurationSeconds, dur.Seconds()))
+			slog.String(AttrErrorType, fmt.Sprintf("%T", err)),
+			slog.Float64(AttrDurationSeconds, dur.Seconds()))
 		return err
 	}
 
 	old := r.ptr.Swap(&entry[T]{gen: nextGen, res: res})
-	r.log(slog.LevelInfo, "reloader: resource swapped",
+	r.log(ctx, slog.LevelInfo, "reloader: resource swapped",
 		slog.Uint64(AttrGeneration, nextGen))
 	if old != nil && r.closer != nil {
 		r.scheduleDrain(*old)
@@ -305,7 +304,7 @@ func (r *Reloader[T]) Shutdown(ctx context.Context) error {
 	for _, t := range tasks {
 		t.fire(CloseShutdown)
 	}
-	r.log(slog.LevelInfo, "reloader: shutdown",
+	r.log(ctx, slog.LevelInfo, "reloader: shutdown",
 		slog.Uint64(AttrGeneration, gen))
 	return err
 }
@@ -313,14 +312,14 @@ func (r *Reloader[T]) Shutdown(ctx context.Context) error {
 // closeEntry 关闭单个资源并分发事件与日志。closer 须非 nil。
 func (r *Reloader[T]) closeEntry(ctx context.Context, e entry[T], reason CloseReason) error {
 	err := r.closeSafe(ctx, e.res)
-	r.dispatch(func(o Observer) {
+	r.dispatch(ctx, func(o Observer) {
 		o.OnResourceClosed(ResourceClosedEvent{Generation: e.gen, Reason: reason, Err: err})
 	})
 	lvl := slog.LevelInfo
 	if err != nil {
 		lvl = slog.LevelWarn
 	}
-	r.log(lvl, "reloader: resource closed",
+	r.log(ctx, lvl, "reloader: resource closed",
 		slog.Uint64(AttrGeneration, e.gen),
 		slog.String(AttrReason, string(reason)))
 	return err
@@ -348,13 +347,13 @@ func (r *Reloader[T]) Generation() uint64 {
 
 // dispatch 同步分发事件；单个观察者 panic 被 recover 并记日志
 // （纯旁路，不得改变重载语义）。
-func (r *Reloader[T]) dispatch(fn func(Observer)) {
+func (r *Reloader[T]) dispatch(ctx context.Context, fn func(Observer)) {
 	for _, o := range r.observers {
 		func() {
 			defer func() {
 				if p := recover(); p != nil {
-					r.log(slog.LevelError, "reloader: observer panic recovered",
-						slog.String(observ.AttrErrorType, fmt.Sprintf("%v", p)))
+					r.log(ctx, slog.LevelError, "reloader: observer panic recovered",
+						slog.String(AttrErrorType, fmt.Sprintf("%v", p)))
 				}
 			}()
 			fn(o)
@@ -362,6 +361,6 @@ func (r *Reloader[T]) dispatch(fn func(Observer)) {
 	}
 }
 
-func (r *Reloader[T]) log(level slog.Level, msg string, attrs ...slog.Attr) {
-	r.logger.Log(level, msg, attrs...)
+func (r *Reloader[T]) log(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	r.logger.LogAttrs(ctx, level, msg, attrs...)
 }

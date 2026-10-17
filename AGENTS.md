@@ -8,7 +8,7 @@
 
 - 根模块 `github.com/jninng/reloader`：`reloader.go`（状态机）、`options.go`、`observer.go`、`metrics.go`、`attr.go`、`doc.go`
 - `reloader_test.go`：fake 资源状态机测试；`example_test.go`：godoc 可运行示例
-- `examples/mockdb/`：可运行演示（mock db 完整生命周期，仅 stdlib + observ）
+- `examples/mockdb/`：可运行演示（mock db 完整生命周期，业务侧仅 stdlib）
 - `CONTEXT.md`：术语表；`docs/adr/`：设计决策（0001 单类型参数、0002 宽限期排空、0003 指标按 Meter 共享）
 
 ## 常用命令（Windows / Git Bash）
@@ -20,8 +20,8 @@ go vet ./...
 
 ## 依赖规则（硬约束）
 
-- 根模块唯一第三方依赖 `github.com/jninng/observ`；不得引入其他第三方依赖（事件源如 redis 订阅归业务侧，README 演示写法）。
-- 可观测接入对齐 observ 手册：类型化非泛型 Observer（事件按值、不含资源句柄）；option 注入（`WithMeter` 默认 Noop、`WithLogger` 构造期快照）；回调同步快速执行且由库 recover；指标仅无 label 与枚举拆名两种形态，多实例按 Meter 去重共享。
+- 根模块唯一运行时第三方依赖 `go.opentelemetry.io/otel/metric`；测试为仪表断言可另引 `go.opentelemetry.io/otel/sdk/metric`（不得出现在库代码 import 中）；不得引入其他第三方依赖（事件源如 redis 订阅归业务侧，README 演示写法）。
+- 可观测接入对齐 slog/otel 惯例：类型化非泛型 Observer（事件按值、不含资源句柄）；option 注入（`WithMeter` 缺省 nil 不埋点、`WithLogger` 缺省静默且构造期快照）；回调同步快速执行且由库 recover；指标仅无 label 与枚举拆名两种形态，多实例按 Meter 去重共享；指标/属性键保持 snake_case 口径（`*_total`/`*_seconds`、`error.type`）。
 
 ## API 约定
 
