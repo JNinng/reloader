@@ -22,7 +22,7 @@ go get github.com/jninng/reloader
 
 ## 快速上手
 
-### 热换 go-redis 客户端
+### 重载 go-redis 客户端
 
 ```go
 // 业务侧配置槽：配置监听写这里，工厂读这里。
@@ -104,7 +104,7 @@ github.com/jninng/reloader
 ├── reloader.go / options.go / observer.go / metrics.go / attr.go / doc.go
 ├── reloader_test.go / example_test.go   // -race 必过
 ├── examples/mockdb/                     // 可运行演示：mock db 完整生命周期
-├── CONTEXT.md                            // 术语表（重载器/资源/工厂/世代/排空/关停）
+├── CONTEXT.md                            // 术语表
 └── docs/adr/                             // 设计决策记录
 ```
 
@@ -112,7 +112,7 @@ github.com/jninng/reloader
 
 ```bash
 go test -race ./...
-go run ./examples/mockdb   # 演示：热换/失败保旧/世代复用/排空/优雅关停
+go run ./examples/mockdb   # 演示：重载/失败保旧/世代复用/排空/优雅关停
 ```
 
 ## License

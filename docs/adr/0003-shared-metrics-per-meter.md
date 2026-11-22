@@ -1,6 +1,6 @@
 # 指标按 Meter 去重共享
 
-多个 Reloader 实例共用同一 Meter 时，指标对象按 Meter 只创建一次（首个实例创建，后续实例复用），counter/histogram 聚合为"本进程内库级活动"口径；`reloader_generation` 语义为最近一次成功换新的世代（跨实例）。理由：指标口径无 label（枚举拆名）、无法按实例拆分；prom 系后端对同名重复注册冲突（构造期或采集期报错），若每实例独立注册，全应用共享一个 registry 的最自然用法会让第二个实例在注册时报错。防御：Meter 动态类型不可比较时退化为每实例直建。
+多个 Reloader 实例共用同一 Meter 时，指标对象按 Meter 只创建一次（首个实例创建，后续实例复用），counter/histogram 聚合为"本进程内库级活动"口径；`reloader_generation` 语义为最近一次成功换新的世代（跨实例）。理由：指标口径无 label（枚举拆名）、无法按实例拆分；Prometheus 系后端对同名重复注册冲突（构造期或采集期报错），若每实例独立注册，全应用共享一个 registry 的最自然用法会让第二个实例在注册时报错。防御：Meter 动态类型不可比较时退化为每实例直建。
 
 ## Considered Options
 
