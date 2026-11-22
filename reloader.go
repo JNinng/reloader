@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// ErrShutdown 在 Shutdown 之后调用 Reload 返回。
+// ErrShutdown 关停后调用 Reload 返回；等待补跑期间观察到关停的
+// 调用同样返回。
 var ErrShutdown = errors.New("reloader: shutdown")
 
 // DefaultCloseDelay 排空宽限期缺省值：换下的旧资源在此期限内关闭，

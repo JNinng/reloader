@@ -52,7 +52,7 @@ func (b *buildLog) snapshot() ([]uint64, []*fakeRes) {
 	return append([]uint64(nil), b.gens...), append([]*fakeRes(nil), b.res...)
 }
 
-// obsLog 记录 Observer 事件序列。
+// obsRec 单条 Observer 事件记录。
 type obsRec struct {
 	kind   string // start / end / closed
 	gen    uint64
@@ -60,6 +60,7 @@ type obsRec struct {
 	err    error
 }
 
+// obsLog 记录 Observer 事件序列。
 type obsLog struct {
 	mu  sync.Mutex
 	evs []obsRec
@@ -190,14 +191,16 @@ func (tm *testMeter) gauge(name string) float64 {
 	return 0
 }
 
-// newBadMeter 返回动态类型不可比较（含切片字段）的 Meter：验证共享
-// 缓存的退化路径（ADR-0003：不可比较键退化为每实例直建而非 panic）。
-// 同步仪表接口密封，工厂方法嵌入 noop Meter 返回真实仪表。
+// badMeter 是动态类型不可比较（含切片字段）的 Meter：验证共享缓存的
+// 退化路径（ADR-0003：不可比较键退化为每实例直建而非 panic）。otel
+// 同步仪表接口密封、无法外部 fake，嵌入 noop Meter 使其工厂方法可
+// 正常产出真实仪表。
 type badMeter struct {
 	metric.Meter
 	_ []int
 }
 
+// newBadMeter 构造 badMeter 实例。
 func newBadMeter() badMeter {
 	return badMeter{Meter: noop.NewMeterProvider().Meter("reloader.bad")}
 }
@@ -539,7 +542,7 @@ func TestShutdownClosesCurrentAndFiresPendingDrains(t *testing.T) {
 		t.Fatalf("重复 Shutdown 应幂等返回 nil, got %v", err)
 	}
 
-	// 事件断言：两个 closed（各一次），无 drain 原因残留。
+	// 事件断言：closed 事件恰两次——当前资源关闭与提前触发的排空各一次。
 	closed := 0
 	for _, e := range obs.snapshot() {
 		if e.kind == "closed" {

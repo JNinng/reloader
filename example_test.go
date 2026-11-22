@@ -31,7 +31,7 @@ func Example() {
 		return &demoClient{addr: a, gen: gen}, nil
 	}
 	closeFn := func(ctx context.Context, c *demoClient) error {
-		return nil // 真实场景：c.Close()，宽限期内旧客户端仍可用
+		return nil // 真实场景：c.Close()，宽限期内旧资源仍可用
 	}
 
 	r, err := reloader.New(context.Background(), build,

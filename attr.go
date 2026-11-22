@@ -10,7 +10,8 @@ const (
 	// AttrReason 资源关闭原因枚举（drain / shutdown）。
 	AttrReason = "reason"
 
-	// AttrErrorType 错误类型标识（错误动态类型或 panic 值的类型）。
+	// AttrErrorType 错误类型标识（错误记动态类型，观察者 panic 记
+	// panic 值）。
 	AttrErrorType = "error.type"
 
 	// AttrDurationSeconds 耗时，单位秒（与 _seconds 指标口径一致）。

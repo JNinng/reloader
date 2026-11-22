@@ -26,7 +26,7 @@ func (closerOption[T]) option() {}
 // 适用于无泄漏风险的值类型资源（如配置快照）。T 由参数推断。
 //
 // 关闭函数一律以 context.Background() 执行——排空由独立 timer
-// goroutine 触发、关停时无调用方 ctx 可透传，需要超时由关闭函数自行
+// goroutine 触发、关停的 ctx 仅约束等待，需要超时由关闭函数自行
 // 包装；排空关闭的结果仅经 OnResourceClosed 事件与日志上报（失败
 // warn、成功 info），不以返回值形式交付调用方。
 func WithCloser[T any](close func(ctx context.Context, res T) error) Option {

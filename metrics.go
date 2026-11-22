@@ -63,8 +63,9 @@ func metricsFor(m metric.Meter) *metricSet {
 }
 
 // sharedSet 查共享缓存并写入；键不可比较（map 读写即 panic）时返回
-// ok=false，由调用方退化为每实例直建。New* 的 panic 同样落入这里的
-// recover，由退化直建原样重抛（工厂副作用因此执行两次）。
+// ok=false，由调用方退化为每实例直建。仪表创建（Meter 方法）的
+// panic 同样落入这里的 recover，由退化直建原样重抛（创建副作用因此
+// 执行两次）。
 func sharedSet(m metric.Meter) (set *metricSet, ok bool) {
 	defer func() {
 		if recover() != nil {

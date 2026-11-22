@@ -41,7 +41,12 @@ type ResourceClosedEvent struct {
 // 回调在触发点所在 goroutine 同步执行，必须快速返回（微秒级）；
 // panic 由重载器 recover（纯旁路，不得改变重载语义）。
 type Observer interface {
+	// OnReloadStart 一轮构建开始时触发。
 	OnReloadStart(ReloadStartEvent)
+
+	// OnReloadEnd 一轮构建结束时触发（成功或失败）。
 	OnReloadEnd(ReloadEndEvent)
+
+	// OnResourceClosed 一个资源被关闭时触发。
 	OnResourceClosed(ResourceClosedEvent)
 }

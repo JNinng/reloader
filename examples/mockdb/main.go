@@ -19,7 +19,7 @@ import (
 
 var errClosed = errors.New("mockdb: closed")
 
-// mockDB 模拟需要热更新的目标资源（真实场景如 sql.DB / *redis.Client，
+// mockDB 模拟被重载器管理的目标资源（真实场景如 sql.DB / *redis.Client，
 // 调用方经 Current 直接使用其原生 API）。
 type mockDB struct {
 	id     uint64 // 实例编号，即构建时分配到的世代
@@ -27,7 +27,7 @@ type mockDB struct {
 	closed atomic.Bool
 }
 
-// Ping 模拟连接预检。
+// Ping 模拟健康预检。
 func (db *mockDB) Ping() error {
 	if db.closed.Load() {
 		return errClosed
@@ -53,7 +53,7 @@ func (db *mockDB) Close() error {
 
 // ---- 模拟配置中心 ----
 
-// dbConfig 模拟一份会热更的数据库配置。
+// dbConfig 模拟一份运行期会变更的数据库配置。
 type dbConfig struct {
 	DSN string
 }
